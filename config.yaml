@@ -1,0 +1,5 @@
+considered_attacks: [
+  # ait log data set v2:
+  'wpscan', 'dirb', 'dnsteal', 'dns_scan', 'service_scan', 'attacker_change_user', 'escalated_sudo_command', 'webshell_cmd', 'crack_passwords', 'webshell_upload',
+  # ait log data set v1:
+  'hydra', 'mail-curl', 'nikto', 'nmap', 'okay-curl', 'okay-upload-webshell', 'upload', 'vrfy', 'webshell']
