@@ -1,4 +1,4 @@
-from ruamel import yaml
+import yaml
 
 def load_yaml_file(file_path):
     """Load .yaml file into a dictionary."""
@@ -15,7 +15,7 @@ def dump_config(filename : str, configuration : dict):
     """Create config file from dictionary."""
     #yaml.add_representer(float, represent_float)
     with open(filename, "w") as file:
-        yaml.dump(configuration, file, sort_keys=False, indent=4)
+        yaml.dump(configuration, file, sort_keys=False, indent=4, Dumper=yaml.SafeDumper, default_flow_style=False)
 
 
 def adapt_predefined_analysis_config(analysis_config, detectors, df, print_deleted=False):

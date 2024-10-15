@@ -4,6 +4,8 @@ import argparse
 import time
 from itertools import product
 from lib.EvaluationSuite import EvaluationSuite
+from lib.Evaluation import Evaluation
+from lib.AMinerModel import AMinerModel
 
 # import from submodule
 import sys
@@ -17,74 +19,61 @@ from utils.constants import DETECTOR_ID_DICT
 
 def get_args():
     """Returns command line arguments."""
+    detector_help = f"Choose which detectors to be evaluated by their IDs (e.g., '13' means detectors with IDs 1 and 3): {str(DETECTOR_ID_DICT)}"
     parser = argparse.ArgumentParser(description="", formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("-d", "--data_dir", type=str, default="/data", help="Directory with data files. All log files in folder will be used as training data.")
     parser.add_argument("-pd", "--use_parsed_data", type=str, default="true", help="Use already parsed data if same data was previsouly parsed? Parsed data is saved temporarily in /tmp.")
     parser.add_argument("-l", "--label_file_path", type=str, default=None, help="Path to label file.")
     parser.add_argument("-p", "--parser_name", type=str, default="ApacheAccessParsingModel", help="Type of parser.")
-    detector_help = f"Choose which detectors to be evaluated by their IDs (e.g., '13' means detectors with IDs 1 and 3): {str(DETECTOR_ID_DICT)}"
     parser.add_argument("-id", "--detector_ids", type=str, default="1,2,3,4,5,6,7", help=detector_help)
-    parser.add_argument("-c", "--config_path", type=str, default=None, help="Path to the configuration file.")
+    parser.add_argument("-c", "--config_file_path", type=str, default=None, help="Path to the configuration file.")
     args = parser.parse_args()
-    args.detectors = [DETECTOR_ID_DICT[id] for id in args.detector_ids.split(",")]
     return args.__dict__
 
-def evaluation_pipeline(params):
+def evaluate(params):
     start_total = time.time()
-    evaluator = EvaluationSuite(params)
-
-    # if evaluator.predefined_config_path != None:
-    #     evaluator.predefined_config = load_yaml_file(evaluator.predefined_config_path)
-    # else:
-    #     evaluator.predefined_config = None
+    evaluator = EvaluationSuite(**params)
     
     evaluator.print_info(verbose=True)
-    
-    #print("Training days:\t\t", evaluator.current_period[1] - evaluator.current_period[0])
-    #print("Training samples:\t", len(X))
 
-    # hyperparam tuning
-    # hpt = None
-    # if evaluator.hyperparameter_tuning:
-    #     hpt = {"hp_path": evaluator.hp_path, "hp_value": evaluator.hp_value}
-
-    
-    # delete later!!
-    # analysis_config.append({
+    # to avoid detection of trivial anomalies
+    # evaluator.config["Analysis"].append({
     #     "type": "NewMatchPathDetector",
     #     "id": "NewMatchPathDetector",
     #     "suppress": True
     # })
-    # analysis_config.append({
+    # # forgot why this is here but i think it is important
+    # evaluator.config["Analysis"].append({
     #     "type": 'VerboseUnparsedAtomHandler',
     #     "id": "VerboseUnparsedAtomHandler",
     #     "suppress": True
     # })
 
-    print("Run AMiner ...")
-    start = time.time()
-    Ace.aminer_run(df_train, analysis_config, True, "train" + label)
-    if test_run:
-        Ace.aminer_run(df_test, analysis_config, False, "test" + label)
-    aminer_runtime = time.time()-start
-    print(f"AMiner finished (runtime: {aminer_runtime})")
+    model = AMinerModel(
+        config=evaluator.config,
+        permanent_permission=False,
+        input_path=evaluator.tmp_save_path,
+        tmp_dir=evaluator.output_dir
+    )
+    model.fit_predict(evaluator.df_train, evaluator.df_test, print_progress=True)
 
     print("\nEvaluating results...")
     start = time.time()
-    results_aminer = Evaluation(evaluator.df_test, evaluator.attack_rows, evaluator.detectors, evaluator.test_offset[0], evaluator.test_offset[1], True, evaluator.output_dir + "/aminer_out.json")
-    results_aminer.eval_per_time(evaluator.df_attack_periods, evaluator.attack_tolerance)
+    results_aminer = Evaluation(evaluator.df_test, evaluator.attack_idx, evaluator.detectors, evaluator.test_offset[0], evaluator.test_offset[1])
+    attack_tolerance = 0
+    results_aminer.eval_per_time(evaluator.df_attack_periods, attack_tolerance)
     print(f"Evaluation completed (runtime: {time.time()-start})\n")
 
-    # add runtimes to results
-    results_aminer.eval_dict["metrics"]["Runtime Configuration"] = config_runtime
-    results_aminer.eval_dict["metrics_over_time"]["Runtime Configuration"] = config_runtime
-    results_aminer.eval_dict["metrics"]["Runtime AMiner"] = aminer_runtime
-    results_aminer.eval_dict["metrics_over_time"]["Runtime AMiner"] = aminer_runtime
+    # # add runtimes to results
+    # results_aminer.eval_dict["metrics"]["Runtime Configuration"] = config_runtime
+    # results_aminer.eval_dict["metrics_over_time"]["Runtime Configuration"] = config_runtime
+    # results_aminer.eval_dict["metrics"]["Runtime AMiner"] = aminer_runtime
+    # results_aminer.eval_dict["metrics_over_time"]["Runtime AMiner"] = aminer_runtime
 
-    # add hyperparam to results
-    if evaluator.hyperparameter_tuning:
-        results_aminer.eval_dict["metrics"]["hp_value"] = evaluator.hp_value
-        results_aminer.eval_dict["metrics_over_time"]["hp_value"] = evaluator.hp_value
+    # # add hyperparam to results
+    # if evaluator.hyperparameter_tuning:
+    #     results_aminer.eval_dict["metrics"]["hp_value"] = evaluator.hp_value
+    #     results_aminer.eval_dict["metrics_over_time"]["hp_value"] = evaluator.hp_value
 
     results_aminer.print_results()
 
@@ -98,7 +87,7 @@ def evaluation_pipeline(params):
 
 params = get_args()
 
-evaluation_pipeline(params)
+evaluate(params)
 
 # all_params = {
 #     "dataset" : [
