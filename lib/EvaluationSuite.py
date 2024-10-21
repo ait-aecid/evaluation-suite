@@ -1,21 +1,35 @@
 import os
-import argparse
 import pandas as pd
 import json
 import numpy as np
-import pickle
 import time
 import yaml
+import getpass
 
 # import from submodule
 import sys
 sys.path.append('log-preprocessor')
 from LogData import LogData
+from tools.AMinerModel import AMinerModel
+from utils.constants import DETECTOR_ID_DICT
 
 from lib.configUtils import *
 from lib.transformationUtils import *
+from lib.Evaluation import Evaluation
 
-from utils.constants import DETECTOR_ID_DICT
+def in_jupyter_notebook():
+    """Check if the function was called from within a jupyter notebook."""
+    try:
+        # Check if the get_ipython function exists (unique to IPython environments)
+        from IPython import get_ipython
+        ipy_instance = get_ipython()
+        if ipy_instance and 'IPKernelApp' in ipy_instance.config:
+            return True
+        else:
+            return False
+    except ImportError:
+        # IPython is not installed, likely not running in a Jupyter notebook
+        return False
 
 def get_attack_idx(path, offset=0):
     """Returns the attack row numbers (indices) from the specifed attack labels file."""
@@ -34,19 +48,15 @@ class EvaluationSuite:
             label_file_path: str,
             config_file_path: str,
             parser_name: str,
-            detector_ids="1,2,3,4,5,6,7",
             use_parsed_data=True,
             tmp_save_path="/tmp/current_data.log"
         ):
         """Initialize evaluation pipeline."""
         self.label_file_path = label_file_path
         self.parser_name = parser_name
-
-        #os.makedirs("tmp", exist_ok=True) # create tmp directory
-        os.makedirs(os.path.join("/tmp", "data_parsed"), exist_ok=True)
         self.tmp_save_path = tmp_save_path
-        self.detectors = [DETECTOR_ID_DICT[id] for id in detector_ids.split(",")]
         # get the data
+        print("\n------------------------------- DATA EXTRACTION -------------------------------")
         start = time.time()
         data = LogData(
             data_dir,
@@ -54,7 +64,7 @@ class EvaluationSuite:
             tmp_save_path=self.tmp_save_path
         )
         self.df = data.get_df(use_parsed_data)
-        print(f"Finished data extraction (runtime: {time.time() - start}).")
+        print(f"Data extraction finished. (runtime: {time.time() - start})")
 
         with open("settings/config.yaml") as file:
             self.settings = yaml.safe_load(file)
@@ -79,8 +89,50 @@ class EvaluationSuite:
         with open(config_file_path) as file:
             self.config = yaml.safe_load(file)
 
-        self.init_output_dir()
-            
+    def evaluate(self, detector_ids="1,2,3,4,5,6,7"):
+        """Evaluate the AMiner """
+        print("\n------------------------------------ INFO -------------------------------------")
+        self.print_info()
+        detectors = [DETECTOR_ID_DICT[id] for id in detector_ids.split(",")]
+        output_dir = self.init_output_dir(detectors)
+
+        # to avoid detection of trivial anomalies
+        if not any(d.get("type") == "NewMatchPathDetector" for d in self.config["Analysis"]):
+            self.config["Analysis"].append({
+                "type": "NewMatchPathDetector",
+                "id": "NewMatchPathDetector",
+                "suppress": True
+            })
+        # to avoid recognition of unparsed log lines as detected anomalies
+        if not any(d.get("type") == "VerboseUnparsedAtomHandler" for d in self.config["Analysis"]):
+            self.config["Analysis"].append({
+                "type": 'VerboseUnparsedAtomHandler',
+                "id": "VerboseUnparsedAtomHandler",
+                "suppress": True
+            })
+        print("\n--------------------------------- EVALUATION ----------------------------------")
+        # get password if execution is in jupyter notebook
+        pwd=None
+        if in_jupyter_notebook():
+            print("(running in Jupyter notebook)")
+            if pwd is None:
+                pwd = getpass.getpass("Execution in jupyter notebook requires sudo password:")
+        model = AMinerModel(
+            config=self.config,
+            input_path=self.tmp_save_path,
+            tmp_dir=output_dir,
+            pwd=pwd
+        )
+        model.fit_predict(self.df_train, self.df_test, print_progress=True)
+
+        print("Evaluating results...")
+        start = time.time()
+        results_aminer = Evaluation(self.df_test, self.attack_idx, detectors, self.test_offset[0], self.test_offset[1])
+        attack_tolerance = 0
+        results_aminer.eval_per_time(self.df_attack_periods, attack_tolerance)
+        print(f"Evaluation finished. (runtime: {time.time()-start})\n")
+
+        results_aminer.print_results()
 
     def get_label_file_info(self) -> dict:
         """Returns a dict containing label file infos."""
@@ -110,23 +162,23 @@ class EvaluationSuite:
         df.columns = ["attack_periods"]
         return df
 
-    def init_output_dir(self):
+    def init_output_dir(self, detectors: list):
         """Initialize output dir."""
-        self.result_label = f"{str(len(self.df))}_samples"
-        output_dir_rel = os.path.join("output", '_'.join(self.detectors), self.parser_name, self.result_label)
-        self.output_dir = os.path.abspath(output_dir_rel)
-        os.makedirs(self.output_dir, exist_ok=True)
-        os.makedirs(os.path.join(self.output_dir, "optimization"), exist_ok=True)
-        os.makedirs(os.path.join(self.output_dir, "optimization", "data"), exist_ok=True)
-        os.makedirs(os.path.join(self.output_dir, "optimization", "config"), exist_ok=True)
+        result_label = f"{str(len(self.df))}_samples"
+        output_dir_rel = os.path.join("output", '_'.join(detectors), self.parser_name, result_label)
+        output_dir = os.path.abspath(output_dir_rel)
+        os.makedirs(output_dir, exist_ok=True)
+        return output_dir
     
-    def print_info(self, verbose=True):
-        if verbose:
-            print("\nDate range:\t\t[" + str(self.df["ts"].iloc[0]) + "] to [" + str(self.df["ts"].iloc[-1]) + "]")
-            print("Attack period:\t\t[" + str(self.attack_start) + "] to [" + str(self.attack_end) + "]")
-            print("Training period: \t[" + str(self.df["ts"].iloc[0]) + "] to [" + str(self.attack_start) + "]")
-            print("Training time: \t\t[" + str(self.attack_start - self.df["ts"].iloc[0]) + "]")
-            print(f"Attack offset:\t\t{self.attack_offset}")
-        print("\nTraining samples:\t" + str(len(self.df_train)))
-        print("Test samples:\t\t" + str(len(self.df_test)))
-        print("----------------------------------------------")
+    def print_info(self):
+        info = (
+            f"\nDate range:       [{str(self.df['ts'].iloc[0])}] to [{str(self.df['ts'].iloc[-1])}]"
+            f"\nAttack period:    [{str(self.attack_start)}] to [{str(self.attack_end)}]"
+            f"\nTraining period:  [{str(self.df['ts'].iloc[0])}] to [{str(self.attack_start)}]"
+            f"\nTraining time:    [{str(self.attack_start - self.df['ts'].iloc[0])}]"
+            f"\nAttack offset:    {self.attack_offset}"
+            f"\nTraining samples: {str(len(self.df_train))}"
+            f"\nTest samples:     {str(len(self.df_test))}"
+        )
+        print(info)
+        
